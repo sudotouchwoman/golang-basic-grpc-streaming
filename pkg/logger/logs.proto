@@ -12,6 +12,9 @@ message LogRecord {
   bool success = 3;
 }
 
+// request format: client and emitter
+// names and desired baudrate
+
 message LogStreamRequest {
   string emitter = 1;
   string client = 2;
