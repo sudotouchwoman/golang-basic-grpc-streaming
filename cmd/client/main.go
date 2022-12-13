@@ -14,8 +14,9 @@ import (
 )
 
 func main() {
-	addr := "localhost:8080"
-	flag.StringVar(&addr, "-a", addr, "gRPC Dial Address")
+	addr, emitter := "localhost:8080", "esp32"
+	flag.StringVar(&emitter, "e", emitter, "Emitter name")
+	flag.StringVar(&addr, "addr", addr, "gRPC Dial Address")
 	flag.Parse()
 
 	cc, err := grpc.Dial(
@@ -23,23 +24,23 @@ func main() {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		log.Fatalf("failed to connect: %e", err)
+		log.Fatalf("failed to connect: %s", err)
 	}
 	defer cc.Close()
-	ListenForLogs(loggerpb.NewLoggerServiceClient(cc))
+	ListenForLogs(loggerpb.NewLoggerServiceClient(cc), emitter)
 }
 
-func ListenForLogs(cl loggerpb.LoggerServiceClient) {
+func ListenForLogs(cl loggerpb.LoggerServiceClient, emitter string) {
 	log.Println("connected to gRPC streaming server, starts polling")
 	req := &loggerpb.LogStreamRequest{
-		Emitter:  "esp32",
+		Emitter:  emitter,
 		Client:   strconv.Itoa(os.Getpid()),
 		Baudrate: 115200,
 	}
 
 	logStream, err := cl.GetLogStream(context.Background(), req)
 	if err != nil {
-		log.Fatalf("error while querying server: %e", err)
+		log.Fatalf("error while querying server: %s", err)
 	}
 	for {
 		msg, err := logStream.Recv()
@@ -48,7 +49,7 @@ func ListenForLogs(cl loggerpb.LoggerServiceClient) {
 			break
 		}
 		if err != nil {
-			log.Fatalf("error during stream read: %e", err)
+			log.Fatalf("stream read: %s", err)
 		}
 		log.Printf("[%s] - (%s)", msg.Emitter, msg.Msg)
 	}

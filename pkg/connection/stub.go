@@ -99,7 +99,7 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 	}
 
 	closeLock := &sync.Mutex{}
-	hook := func() error {
+	proxyCancelHook := func() error {
 		// cancel context of this consumer
 		// and decrement barrier
 		// make sure to do this atomically
@@ -116,14 +116,15 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 		conn.Barrier.Done()
 		return nil
 	}
-	proxy.CancelHook = hook
+	proxy.CancelHook = proxyCancelHook
 
 	// once parent context is done,
 	// underlying connections should be closed too
 	go func(ctx context.Context) {
 		<-ctx.Done()
+		log.Println("silently cancels proxy")
 		// close silently
-		_ = hook()
+		_ = proxyCancelHook()
 	}(conn.Ctx)
 	return proxy, nil
 }
@@ -159,10 +160,13 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		// it might be a good idea to compare other properties
 		// before new proxy creation
 		if !conn.Props.Compatible(props) {
+			log.Println("existing connection props are incompatible")
 			return nil, ErrIncompatibleProps
 		}
+		log.Println("reuses existing connection")
 		return conn.NewProxy()
 	}
+	log.Println("connection will be opened")
 
 	// such connection does not exist yet thus must be created
 	// get channels from somewhere
@@ -183,17 +187,23 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		Peers:    []chan<- []byte{},
 	}
 
-	// hook needs a closure for the connection
+	// connCloseHook needs a closure for the connection
 	// in order to safely check the peer count
 	// thus it is attached separately
-	hook := func() error {
+	connCloseHook := func() error {
 		connCtxCancel()
 		conn.Mu.Lock()
 		defer conn.Mu.Unlock()
+		// do not forget to clean up itself
+		// once done (so that subsequent
+		// calls to Open have no false positives)
+		pr.mu.Lock()
+		delete(pr.connections, id)
+		defer pr.mu.Unlock()
 		log.Println("unregistered conn", id)
 		return rawConn.CloseHook()
 	}
-	conn.CloseHook = hook
+	conn.CloseHook = connCloseHook
 
 	broadcaster := &Broadcaster{
 		Ctx:      connCtx,
@@ -211,10 +221,10 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// also, start monitoring errors from connection
 	go func(errChan <-chan error) {
 		if err, open := <-errChan; open && err != nil {
-			// log.Printf("error with connection %s: %e\n", conn.Props.ID(), err)
-			_ = hook()
+			log.Printf("error with connection %s: %e\n", id, err)
+			_ = connCloseHook()
 		}
-		log.Println("no errors with this connection", props.ID())
+		// log.Println("no errors with this connection", id)
 	}(rawConn.ErrChan)
 
 	// register in the map so that the subsequent
@@ -224,8 +234,10 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// wait until all consumers cancel their requests
 	// and shut the connection down
 	go func(wg *sync.WaitGroup, id ConnID) {
+		log.Println(id, "waits for clients to disconnect")
 		wg.Wait()
-		_ = hook()
+		log.Println(id, "all clients disconnected")
+		_ = connCloseHook()
 	}(group, id)
 
 	return conn.NewProxy()
@@ -233,15 +245,16 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 
 // Close connection with given id. Propagate error, if any.
 func (pr *ConnectionProvider) Close(id ConnID) error {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
+	pr.mu.RLock()
 	if conn, exists := pr.connections[id]; exists {
 		// the following call aquires the lock
 		// thus read lock must be released in advance
-		log.Println("going to close", id)
+		log.Println("requested to close existing conn with id=", id)
+		pr.mu.RUnlock()
 		delete(pr.connections, id)
 		return conn.CloseHook()
 	}
+	pr.mu.RUnlock()
 	return ErrAlreadyClosed
 }
 
