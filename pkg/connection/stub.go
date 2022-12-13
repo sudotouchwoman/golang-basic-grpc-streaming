@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"log"
 	"sync"
 )
 
@@ -32,15 +33,15 @@ func (b *Broadcaster) Broadcast() {
 	}
 }
 
-// Represents actually opened connection
+// Represents active connection monitored by provider
 type connection struct {
-	Ctx        context.Context
-	Mu         *sync.RWMutex
-	Barrier    *sync.WaitGroup
-	Props      ConnectionProps
-	SendChan   chan<- []byte
-	Peers      []chan<- []byte
-	CancelHook func() error
+	Ctx       context.Context
+	Mu        *sync.RWMutex
+	Barrier   *sync.WaitGroup
+	Props     ConnectionProps
+	SendChan  chan<- []byte
+	Peers     []chan<- []byte
+	CloseHook func() error
 }
 
 // Add listener channel to the slice
@@ -109,11 +110,11 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 
 	// once parent context is done,
 	// underlying connections should be closed too
-	go func() {
-		<-conn.Ctx.Done()
+	go func(ctx context.Context) {
+		<-ctx.Done()
 		// close silently
 		_ = hook()
-	}()
+	}(conn.Ctx)
 	return proxy, nil
 }
 
@@ -146,9 +147,9 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 
 	// such connection does not exist yet thus must be created
 	// get channels from somewhere
-	rawConn := pr.connFactory.NewWithProps(props)
-	if rawConn.Err != nil {
-		return nil, rawConn.Err
+	rawConn, err := pr.connFactory.NewWithProps(props)
+	if err != nil {
+		return nil, err
 	}
 
 	connCtx, connCtxCancel := context.WithCancel(pr.ctx)
@@ -178,7 +179,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		delete(pr.connections, id)
 		return rawConn.CloseHook()
 	}
-	conn.CancelHook = hook
+	conn.CloseHook = hook
 
 	broadcaster := &Broadcaster{
 		Ctx:      connCtx,
@@ -193,6 +194,13 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// from this connection to whoever is listening
 	// for them
 	go broadcaster.Broadcast()
+	// also, start monitoring errors from connection
+	go func(errChan <-chan error) {
+		if err, open := <-errChan; open && err != nil {
+			log.Printf("error with connection %s: %e\n", conn.Props.ID(), err)
+			_ = hook()
+		}
+	}(rawConn.ErrChan)
 
 	// register in the map so that the subsequent
 	// calls would only create new proxies to this connection
@@ -202,8 +210,39 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// and shut the connection down
 	go func(wg *sync.WaitGroup, id ConnID) {
 		wg.Wait()
-		_ = conn.CancelHook()
+		_ = conn.CloseHook()
 	}(group, id)
 
 	return conn.NewProxy()
+}
+
+// Close connection with given id. Propagate error, if any.
+func (pr *ConnectionProvider) Close(id ConnID) error {
+	pr.mu.RLock()
+	if conn, exists := pr.connections[id]; exists {
+		pr.mu.RUnlock()
+		// the following call aquires the lock
+		// thus read lock must be released in advance
+		return conn.CloseHook()
+	}
+	pr.mu.RUnlock()
+	return ErrAlreadyClosed
+}
+
+// Returns a slice of currently monitored connections
+func (pr *ConnectionProvider) ListActive() []ConnID {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	active := make([]ConnID, 0, len(pr.connections))
+	for id := range pr.connections {
+		active = append(active, id)
+	}
+	return active
+}
+
+// Returns a slice of currently accessible connections
+func (pr *ConnectionProvider) ListAccessible() []ConnID {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	return pr.connFactory.ListAccessible()
 }

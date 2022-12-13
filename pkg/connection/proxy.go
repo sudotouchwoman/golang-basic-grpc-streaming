@@ -11,7 +11,6 @@ import (
 // should be managed by the provider
 // and canceled in the cancelHook.
 type ChannelConnectionProxy struct {
-	ConnectionProxy
 	Ctx        context.Context
 	SendChan   chan<- []byte
 	RecvChan   <-chan []byte
