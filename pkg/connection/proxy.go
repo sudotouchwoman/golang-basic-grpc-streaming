@@ -2,6 +2,8 @@ package connection
 
 import (
 	"context"
+	"io"
+	"log"
 	"time"
 )
 
@@ -23,14 +25,23 @@ type ChannelConnectionProxy struct {
 // try to recieve data.
 func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 	select {
-	case got := <-proxy.RecvChan:
-		return got, nil
 	case <-proxy.Ctx.Done():
-		return nil, ErrAlreadyClosed
-	case <-time.After(t):
+		log.Println("proxy context done")
 		break
+	case got, open := <-proxy.RecvChan:
+		// make sure that this channel was opened
+		// at the moment of call
+		if open {
+			log.Println("proxy recieved:", string(got))
+			return got, nil
+		}
+		break
+	case <-time.After(t):
+		log.Println("proxy recv timed out")
+		return nil, ErrTimedOut
 	}
-	return nil, ErrTimedOut
+	log.Println("proxy already closed")
+	return nil, io.EOF
 }
 
 // Ensure that this instance has not
@@ -43,15 +54,16 @@ func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
 	case <-proxy.Ctx.Done():
 		return ErrAlreadyClosed
 	case <-time.After(t):
-		break
+		return ErrTimedOut
 	}
-	return ErrTimedOut
 }
 
 // Execute the cancel hook
 func (proxy *ChannelConnectionProxy) Close() error {
 	if proxy.Done {
+		log.Println("proxy.Close(): already closed")
 		return ErrAlreadyClosed
 	}
+	log.Println("cancels proxy")
 	return proxy.CancelHook()
 }

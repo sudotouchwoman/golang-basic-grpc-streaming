@@ -16,17 +16,23 @@ type Broadcaster struct {
 // to possibly several consumers (specified
 // via TargetFactory attribute)
 func (b *Broadcaster) Broadcast() {
+	log.Println("will broadcast data")
 	for {
 		select {
 		case <-b.Ctx.Done():
+			log.Println("broadcast context done")
 			return
 		case chunk := <-b.Producer:
-			for _, target := range b.TargetFactory() {
+			log.Println("redirects to consumers:", string(chunk))
+			for i, target := range b.TargetFactory() {
 				select {
 				case <-b.Ctx.Done():
+					log.Println("broadcast interrupted")
 					return
 				case target <- chunk:
-					continue
+					log.Printf("redirected to %d chunk: %s\n", i, chunk)
+				default:
+					log.Printf("skip redirect to %d chunk: %s\n", i, chunk)
 				}
 			}
 		}
@@ -58,6 +64,8 @@ func (conn *connection) RemovePeer(ch chan<- []byte) {
 	for i, peer := range conn.Peers {
 		if peer == ch {
 			conn.Peers = remove(conn.Peers, i)
+			close(ch)
+			log.Println("removed peer")
 			return
 		}
 	}
@@ -79,7 +87,8 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 
 	// create new connReciever channel
 	// for this request
-	connReciever := make(chan []byte)
+	// (leave some space so that lines don't get skipped)
+	connReciever := make(chan []byte, 10)
 	conn.AddPeer(connReciever)
 
 	proxy := &ChannelConnectionProxy{
@@ -124,6 +133,15 @@ type ConnectionProvider struct {
 	ctx         context.Context
 	mu          *sync.RWMutex
 	connections map[ConnID]*connection
+}
+
+func NewConnctionProvider(ctx context.Context, factory ConnectionFactory) *ConnectionProvider {
+	return &ConnectionProvider{
+		connFactory: factory,
+		ctx:         ctx,
+		mu:          &sync.RWMutex{},
+		connections: map[ConnID]*connection{},
+	}
 }
 
 // Creates new proxy to connection with given props.
