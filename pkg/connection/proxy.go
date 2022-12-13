@@ -26,26 +26,29 @@ type ChannelConnectionProxy struct {
 // been canceled yet, then
 // try to recieve data.
 func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
-	proxy.RecvLock.RLock()
-	if proxy.Done {
-		// to avoid unnesessary blocking
-		proxy.RecvLock.RUnlock()
-		return nil, io.EOF
-	}
-	proxy.RecvLock.RUnlock()
+	// proxy.RecvLock.RLock()
+	// if proxy.Done {
+	// 	// to avoid unnesessary blocking
+	// 	proxy.RecvLock.RUnlock()
+	// 	return nil, io.EOF
+	// }
+	// proxy.RecvLock.RUnlock()
 
 	select {
 	case <-proxy.Ctx.Done():
 		break
-	case got, open := <-proxy.RecvChan:
-		// make sure that this channel was opened
-		// at the moment of call
-		if open {
-			return got, nil
+	default:
+		select {
+		case got, open := <-proxy.RecvChan:
+			// make sure that this channel was opened
+			// at the moment of call
+			if open {
+				return got, nil
+			}
+			break
+		case <-time.After(t):
+			return nil, ErrTimedOut
 		}
-		break
-	case <-time.After(t):
-		return nil, ErrTimedOut
 	}
 	return nil, io.EOF
 }
@@ -54,21 +57,24 @@ func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 // been canceled yet, then
 // try to send data.
 func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
-	proxy.SendLock.Lock()
-	if proxy.Done {
-		// to avoid unnesessary send to closed channel
-		proxy.SendLock.Unlock()
-		return ErrAlreadyClosed
-	}
-	proxy.SendLock.Unlock()
+	// proxy.SendLock.Lock()
+	// if proxy.Done {
+	// 	// to avoid unnesessary send to closed channel
+	// 	proxy.SendLock.Unlock()
+	// 	return ErrAlreadyClosed
+	// }
+	// proxy.SendLock.Unlock()
 
 	select {
-	case proxy.SendChan <- p:
-		return nil
 	case <-proxy.Ctx.Done():
 		return ErrAlreadyClosed
-	case <-time.After(t):
-		return ErrTimedOut
+	default:
+		select {
+		case proxy.SendChan <- p:
+			return nil
+		case <-time.After(t):
+			return ErrTimedOut
+		}
 	}
 }
 

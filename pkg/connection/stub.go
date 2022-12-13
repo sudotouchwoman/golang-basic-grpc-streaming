@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"log"
 	"sync"
 )
 
@@ -188,15 +189,10 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// in order to safely check the peer count
 	// thus it is attached separately
 	hook := func() error {
-		// conn.Mu.RLock()
-		// defer conn.Mu.RUnlock()
-		// if len(conn.Peers) == 0 {
-		// 	return ErrAlreadyClosed
-		// }
 		connCtxCancel()
-		pr.mu.Lock()
-		defer pr.mu.Unlock()
-		delete(pr.connections, id)
+		conn.Mu.Lock()
+		defer conn.Mu.Unlock()
+		log.Println("unregistered conn", id)
 		return rawConn.CloseHook()
 	}
 	conn.CloseHook = hook
@@ -220,6 +216,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 			// log.Printf("error with connection %s: %e\n", conn.Props.ID(), err)
 			_ = hook()
 		}
+		log.Println("no errors with this connection", props.ID())
 	}(rawConn.ErrChan)
 
 	// register in the map so that the subsequent
@@ -230,7 +227,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// and shut the connection down
 	go func(wg *sync.WaitGroup, id ConnID) {
 		wg.Wait()
-		_ = conn.CloseHook()
+		_ = hook()
 	}(group, id)
 
 	return conn.NewProxy()
@@ -238,14 +235,15 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 
 // Close connection with given id. Propagate error, if any.
 func (pr *ConnectionProvider) Close(id ConnID) error {
-	pr.mu.RLock()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
 	if conn, exists := pr.connections[id]; exists {
-		pr.mu.RUnlock()
 		// the following call aquires the lock
 		// thus read lock must be released in advance
+		log.Println("going to close", id)
+		delete(pr.connections, id)
 		return conn.CloseHook()
 	}
-	pr.mu.RUnlock()
 	return ErrAlreadyClosed
 }
 

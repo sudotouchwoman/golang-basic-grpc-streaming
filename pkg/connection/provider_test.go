@@ -32,18 +32,39 @@ func (df *DummyFactory) NewWithProps(p ConnectionProps) (RawConnection, error) {
 
 	// start emitting dummy messages
 	go func() {
-		for p := range df.Producer {
+		// no idea how to setup this test case so that
+		// send call did not panic after test completes
+		// upd:
+		// you know what panic fuck you
+		// defer func() {
+		// 	if a := recover(); a != nil {
+		// 		log.Println("Recovered in producer", a)
+		// 	}
+		// }()
+		// upd 2:
+		// https://stackoverflow.com/questions/39213230/how-to-test-if-a-channel-is-close-and-only-send-to-it-when-its-not-closed
+		defer func() {
+			close(reader)
+		}()
+		for {
 			select {
 			case <-connCtx.Done():
-				log.Println("producer stopped")
+				log.Println(p.ID(), "producer context done")
 				return
-			default:
-				msg := string(p)
-				log.Println("dummy will send:", msg)
-				reader <- p
-				log.Println("dummy sent:", msg)
+			case chunk := <-df.Producer:
+				select {
+				case <-connCtx.Done():
+					log.Println(p.ID(), "producer context done")
+					return
+				default:
+					msg := string(chunk)
+
+					log.Println(p.ID(), "will produce:", msg)
+					reader <- chunk
+					log.Println(p.ID(), "produced:", msg)
+					time.Sleep(df.Period)
+				}
 			}
-			time.Sleep(df.Period)
 		}
 	}()
 
@@ -52,17 +73,19 @@ func (df *DummyFactory) NewWithProps(p ConnectionProps) (RawConnection, error) {
 		for {
 			select {
 			case <-connCtx.Done():
+				log.Println(p.ID(), "reciever context done")
 				return
 			case chunk := <-writer:
-				log.Println("dummy recieve: ", string(chunk))
-				// no idea how to setup this test case so that
+				log.Println(p.ID(), "dummy recieve: ", string(chunk))
+				time.Sleep(time.Millisecond)
 				select {
 				case <-connCtx.Done():
-					log.Println("reciever stopped")
+					log.Println(p.ID(), "reciever stopped")
 				default:
 					// echo the chunk back
-					reader <- chunk
-					log.Println("echoed: ", string(chunk))
+					log.Println(p.ID(), "want echo: ", string(chunk))
+					df.Producer <- chunk
+					log.Println(p.ID(), "echoed: ", string(chunk))
 				}
 			}
 		}
@@ -73,11 +96,15 @@ func (df *DummyFactory) NewWithProps(p ConnectionProps) (RawConnection, error) {
 		WriterChan: writer,
 		ErrChan:    errChan,
 		CloseHook: func() error {
-			connCtxCancel()
-			close(reader)
-			close(writer)
-			close(errChan)
-			return nil
+			select {
+			case <-connCtx.Done():
+				return nil
+			default:
+				connCtxCancel()
+				close(writer)
+				close(errChan)
+				return nil
+			}
 		},
 	}, nil
 }
@@ -124,7 +151,7 @@ func TestDummyFactory_SeveralClients(t *testing.T) {
 		Err:      nil,
 	}
 	provider := NewConnctionProvider(ctx, &factory)
-	tt := &DummyProps{"0", 200}
+	tt := &DummyProps{"42", 200}
 
 	proxyOne, err := provider.Open(tt)
 	if err != nil {
@@ -189,7 +216,7 @@ func TestDummyFactory_NewWithProps(t *testing.T) {
 	// some external source of data for the connections
 	producer := make(chan []byte, 5)
 	for i := 0; i < 5; i++ {
-		msg := fmt.Sprint("i=", i)
+		msg := fmt.Sprint("i=", 10-i)
 		producer <- []byte(msg)
 	}
 
@@ -201,7 +228,7 @@ func TestDummyFactory_NewWithProps(t *testing.T) {
 		Err:      nil,
 	}
 	provider := NewConnctionProvider(ctx, &factory)
-	tt := &DummyProps{"0", 115200}
+	tt := &DummyProps{"77", 115200}
 
 	proxy, err := provider.Open(tt)
 	if err != nil {
@@ -235,7 +262,7 @@ func PingMessages(
 		from := time.Now()
 		if errSend := proxy.Send(msg, time.Millisecond); errSend != nil {
 			if errSend == ErrAlreadyClosed {
-				log.Println("send failed: channel closed")
+				log.Printf("send failed: channel closed (wanted %s)\n", msg)
 				break
 			}
 			t.Errorf("proxy.Send() error=%v\n", errSend)
@@ -336,7 +363,7 @@ func TestDummyFactory_ProducerConnectionLists(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	expectedActive := []ConnID{"0"}
+	expectedActive := []ConnID{"5"}
 	expectedAccessible := []ConnID{"0", "1"}
 	// sample data source for two clients
 	// expected records is a sample collection of words
@@ -356,11 +383,12 @@ func TestDummyFactory_ProducerConnectionLists(t *testing.T) {
 
 	provider := NewConnctionProvider(ctx, &factory)
 	// note that this proxy will be
-	_, err := provider.Open(&DummyProps{"0", 100})
+	proxy, err := provider.Open(&DummyProps{"5", 100})
 	if err != nil {
 		t.Errorf("provider.Open() error=%v\n", err)
 		return
 	}
+	defer proxy.Close()
 	// check on accessible/active connections
 	active := provider.ListActive()
 	if !reflect.DeepEqual(active, expectedActive) {
@@ -375,5 +403,13 @@ func TestDummyFactory_ProducerConnectionLists(t *testing.T) {
 			"Expected these active ports = %v, got= %v",
 			accessible, expectedAccessible,
 		)
+	}
+	if err := provider.Close("5"); err != nil {
+		t.Errorf("provider.Close() error=%v\n", err)
+		return
+	}
+	if err := provider.Close("5"); err != ErrAlreadyClosed {
+		t.Errorf("provider.Close() expected error, got %v\n", err)
+		return
 	}
 }
