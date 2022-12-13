@@ -24,4 +24,5 @@ message LogStreamRequest {
 service LoggerService {
   // server streaming
   rpc GetLogStream(LogStreamRequest) returns (stream LogRecord);
+  rpc StopLogStream(LogStreamRequest) returns (LogRecord);
 }
