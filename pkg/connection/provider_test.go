@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -54,6 +55,7 @@ func (df *DummyFactory) NewWithProps(p ConnectionProps) (RawConnection, error) {
 				return
 			case chunk := <-writer:
 				log.Println("dummy recieve: ", string(chunk))
+				// no idea how to setup this test case so that
 				select {
 				case <-connCtx.Done():
 					log.Println("reciever stopped")
@@ -136,75 +138,47 @@ func TestDummyFactory_SeveralClients(t *testing.T) {
 	}
 
 	// in this example, close first client
-	// after 5s and the second one after 10s
-	// the first client should be unable to send/recieve after 5s
-	go func(t *testing.T) {
-		time.Sleep(1 * time.Second)
-		log.Println("want to stop proxyOne")
-		if err := proxyOne.Close(); err != nil {
-			t.Errorf("proxyOne.Close() error=%v\n", err)
-			return
-		}
-		log.Println("stopped proxyOne")
-	}(t)
-
-	go func(t *testing.T) {
-		time.Sleep(6 * time.Second)
-		log.Println("want to stop proxyTwo")
-		if err := proxyTwo.Close(); err != nil {
-			t.Errorf("proxyTwo.Close() error=%v\n", err)
-			return
-		}
-		log.Println("stopped proxyTwo")
-	}(t)
+	// after 2s and the second one after 6s
+	// the first client should be unable to send/recieve after 2s
+	time.AfterFunc(9e2*time.Millisecond, func() {
+		StopProxy(t, proxyOne)
+	})
+	time.AfterFunc(6*time.Second, func() {
+		StopProxy(t, proxyTwo)
+	})
 
 	// loop over incoming requests
 	// they should be broadcasted to both proxies
 	// client 1
-	go PongMessages(t, proxyOne, 2*time.Second, func(b []byte) {})
-	// go func(t *testing.T) {
-	// 	for {
-	// 		from := time.Now()
-	// 		log.Println("1 waiting for next chunk")
-	// 		if _, errRecv := proxyOne.Recv(2 * time.Second); errRecv != nil {
-	// 			if errRecv == io.EOF {
-	// 				log.Println("1 stream end")
-	// 				break
-	// 			}
-	// 			t.Errorf("1 proxy.Recv() error=%v (eta %s)\n", errRecv, time.Since(from))
-	// 			break
-	// 		}
-	// 	}
-	// }(t)
+	clientOneLog := make([]string, 0)
+	go PongMessages(t, proxyOne, 2*time.Second, func(b []byte) {
+		clientOneLog = append(clientOneLog, string(b))
+	})
 
 	clientTwoLog := make([]string, 0)
 	PongMessages(t, proxyTwo, 2*time.Second, func(b []byte) {
 		clientTwoLog = append(clientTwoLog, string(b))
 	})
-	// client 2
-	// for {
-	// 	from := time.Now()
-	// 	log.Println("2 waiting for next chunk")
-	// 	if msg, errRecv := proxyTwo.Recv(2 * time.Second); errRecv != nil {
-	// 		if errRecv == io.EOF {
-	// 			log.Println("2 stream end")
-	// 			break
-	// 		}
-	// 		t.Errorf("2 proxy.Recv() error=%v (eta %s)\n", errRecv, time.Since(from))
-	// 		break
-	// 	} else {
-	// 		// guess that
-	// 		// remember this record (operation must be quick enough
-	// 		// so that the broadcaster does not skip the redirect)
-	// 		clientTwoLog = append(clientTwoLog, string(msg))
-	// 	}
-	// }
-	for i, expected := range expectedRecords {
-		record := clientTwoLog[i]
-		if record != expected {
-			t.Errorf("Integrity error: want %s, got %s", expected, record)
-			t.Errorf("Expected: %v, Got: %v", expectedRecords, clientTwoLog)
-		}
+	if !reflect.DeepEqual(expectedRecords, clientTwoLog) {
+		t.Errorf("Expected: %v, Got: %v", expectedRecords, clientTwoLog)
+	}
+	if !reflect.DeepEqual(clientOneLog, expectedRecords[:1]) {
+		t.Errorf(
+			"Client one got unexpected items: %v, expected %v",
+			clientOneLog, expectedRecords[:1],
+		)
+	}
+}
+
+func StopProxy(t *testing.T, proxy ConnectionProxy) {
+	log.Println("want to stop proxy")
+	if err := proxy.Close(); err != nil {
+		t.Errorf("proxy.Close() error=%v\n", err)
+		return
+	}
+	log.Println("stopped proxy")
+	if err := proxy.Close(); err != ErrAlreadyClosed {
+		t.Errorf("proxy.Close() no error on second call")
 	}
 }
 
@@ -222,7 +196,7 @@ func TestDummyFactory_NewWithProps(t *testing.T) {
 	factory := DummyFactory{
 		Ctx:      ctx,
 		Producer: producer,
-		Period:   5e2 * time.Millisecond,
+		Period:   2e2 * time.Millisecond,
 		Active:   []ConnID{"0", "4", "14"},
 		Err:      nil,
 	}
@@ -235,28 +209,25 @@ func TestDummyFactory_NewWithProps(t *testing.T) {
 		return
 	}
 	// close after some time
-	go func(t *testing.T) {
-		time.Sleep(10 * time.Second)
-		log.Println("want to stop proxying")
-		if err := proxy.Close(); err != nil {
-			t.Errorf("proxy.Close() error=%v\n", err)
-			return
-		}
-		log.Println("stopped proxy")
-	}(t)
+	time.AfterFunc(10*time.Second, func() {
+		StopProxy(t, proxy)
+	})
 
 	messages := make(chan []byte, 10)
 
 	// work with incoming requests
-	go PingMessages(t, proxy, 500*time.Millisecond, time.Millisecond, messages)
-	PongMessages(t, proxy, time.Second, func(b []byte) {
+	go PingMessages(t, proxy, time.Second, time.Millisecond, messages)
+	PongMessages(t, proxy, 2*time.Second, func(b []byte) {
 		messages <- b
 	})
 	close(messages)
 	log.Println("closed chan messages")
 }
 
-func PingMessages(t *testing.T, proxy ConnectionProxy, delay, timeout time.Duration, messages <-chan []byte) {
+func PingMessages(
+	t *testing.T, proxy ConnectionProxy,
+	delay, timeout time.Duration,
+	messages <-chan []byte) {
 	for msg := range messages {
 		// wait for a bit
 		time.Sleep(delay)
@@ -265,7 +236,7 @@ func PingMessages(t *testing.T, proxy ConnectionProxy, delay, timeout time.Durat
 		if errSend := proxy.Send(msg, time.Millisecond); errSend != nil {
 			if errSend == ErrAlreadyClosed {
 				log.Println("send failed: channel closed")
-				continue
+				break
 			}
 			t.Errorf("proxy.Send() error=%v\n", errSend)
 		}
@@ -274,7 +245,9 @@ func PingMessages(t *testing.T, proxy ConnectionProxy, delay, timeout time.Durat
 	log.Println("all messages processed")
 }
 
-func PongMessages(t *testing.T, proxy ConnectionProxy, timeout time.Duration, onMessage func([]byte)) {
+func PongMessages(
+	t *testing.T, proxy ConnectionProxy,
+	timeout time.Duration, onMessage func([]byte)) {
 	// loop over incoming requests
 	for {
 		from := time.Now()
@@ -290,5 +263,117 @@ func PongMessages(t *testing.T, proxy ConnectionProxy, timeout time.Duration, on
 			// delegate info to consumer
 			onMessage(msg)
 		}
+	}
+}
+
+func TestDummyFactory_ClientWithTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// sample data source for two clients
+	// expected records is a sample collection of words
+	producer := make(chan []byte, 10)
+	expectedRecords := []string{"1", "2", "3", "4", "5", "6"}
+	for _, record := range expectedRecords {
+		producer <- []byte(record)
+	}
+
+	factory := DummyFactory{
+		Ctx:      ctx,
+		Producer: producer,
+		Period:   time.Second,
+		Active:   []ConnID{"0"},
+		Err:      nil,
+	}
+	provider := NewConnctionProvider(ctx, &factory)
+	tt := &DummyProps{"0", 200}
+
+	proxy, err := provider.Open(tt)
+	if err != nil {
+		t.Errorf("provider.Open() error=%v\n", err)
+		return
+	}
+
+	time.AfterFunc(10*time.Second, func() {
+		StopProxy(t, proxy)
+	})
+	// second call must time out since messages are
+	// emitted approximitely once a second
+	_, errRecv := proxy.Recv(2e2 * time.Millisecond)
+	if errRecv != nil {
+		t.Errorf("Expected no timeout, got=%s", errRecv)
+		return
+	}
+	_, errRecv = proxy.Recv(2e2 * time.Millisecond)
+	if errRecv != ErrTimedOut {
+		t.Errorf("Expected timeout, got=%e", errRecv)
+		return
+	}
+
+	// try opening connection with different parameters
+	if _, err = provider.Open(&DummyProps{"0", 300}); err != ErrIncompatibleProps {
+		t.Errorf("Expected incompatability, got=%e", err)
+		return
+	}
+
+	// after canceling the main provider context
+	// it is still possible to open connections,
+	// however these are closed instantly
+	cancel()
+	_, err = provider.Open(tt)
+	if err != nil {
+		t.Errorf("provider.Open() error=%v\n", err)
+		return
+	}
+	_, errRecv = proxy.Recv(2e2 * time.Millisecond)
+	if errRecv != io.EOF {
+		t.Errorf("Expected EOF, got=%e", errRecv)
+		return
+	}
+}
+
+func TestDummyFactory_ProducerConnectionLists(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	expectedActive := []ConnID{"0"}
+	expectedAccessible := []ConnID{"0", "1"}
+	// sample data source for two clients
+	// expected records is a sample collection of words
+	producer := make(chan []byte, 10)
+	expectedRecords := []string{"1", "2", "3", "4", "5", "6"}
+	for _, record := range expectedRecords {
+		producer <- []byte(record)
+	}
+
+	factory := DummyFactory{
+		Ctx:      ctx,
+		Producer: producer,
+		Period:   time.Second,
+		Active:   expectedAccessible,
+		Err:      nil,
+	}
+
+	provider := NewConnctionProvider(ctx, &factory)
+	// note that this proxy will be
+	_, err := provider.Open(&DummyProps{"0", 100})
+	if err != nil {
+		t.Errorf("provider.Open() error=%v\n", err)
+		return
+	}
+	// check on accessible/active connections
+	active := provider.ListActive()
+	if !reflect.DeepEqual(active, expectedActive) {
+		t.Errorf(
+			"Expected these active ports = %v, got= %v",
+			active, expectedActive,
+		)
+	}
+	accessible := provider.ListAccessible()
+	if !reflect.DeepEqual(accessible, expectedAccessible) {
+		t.Errorf(
+			"Expected these active ports = %v, got= %v",
+			accessible, expectedAccessible,
+		)
 	}
 }

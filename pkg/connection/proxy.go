@@ -3,7 +3,7 @@ package connection
 import (
 	"context"
 	"io"
-	"log"
+	"sync"
 	"time"
 )
 
@@ -13,6 +13,8 @@ import (
 // should be managed by the provider
 // and canceled in the cancelHook.
 type ChannelConnectionProxy struct {
+	SendLock   *sync.Mutex
+	RecvLock   *sync.RWMutex
 	Ctx        context.Context
 	SendChan   chan<- []byte
 	RecvChan   <-chan []byte
@@ -24,23 +26,27 @@ type ChannelConnectionProxy struct {
 // been canceled yet, then
 // try to recieve data.
 func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
+	proxy.RecvLock.RLock()
+	if proxy.Done {
+		// to avoid unnesessary blocking
+		proxy.RecvLock.RUnlock()
+		return nil, io.EOF
+	}
+	proxy.RecvLock.RUnlock()
+
 	select {
 	case <-proxy.Ctx.Done():
-		log.Println("proxy context done")
 		break
 	case got, open := <-proxy.RecvChan:
 		// make sure that this channel was opened
 		// at the moment of call
 		if open {
-			log.Println("proxy recieved:", string(got))
 			return got, nil
 		}
 		break
 	case <-time.After(t):
-		log.Println("proxy recv timed out")
 		return nil, ErrTimedOut
 	}
-	log.Println("proxy already closed")
 	return nil, io.EOF
 }
 
@@ -48,6 +54,14 @@ func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 // been canceled yet, then
 // try to send data.
 func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
+	proxy.SendLock.Lock()
+	if proxy.Done {
+		// to avoid unnesessary send to closed channel
+		proxy.SendLock.Unlock()
+		return ErrAlreadyClosed
+	}
+	proxy.SendLock.Unlock()
+
 	select {
 	case proxy.SendChan <- p:
 		return nil
@@ -60,10 +74,12 @@ func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
 
 // Execute the cancel hook
 func (proxy *ChannelConnectionProxy) Close() error {
+	proxy.SendLock.Lock()
 	if proxy.Done {
-		log.Println("proxy.Close(): already closed")
+		// to avoid unnesessary send to closed channel
+		proxy.SendLock.Unlock()
 		return ErrAlreadyClosed
 	}
-	log.Println("cancels proxy")
+	proxy.SendLock.Unlock()
 	return proxy.CancelHook()
 }

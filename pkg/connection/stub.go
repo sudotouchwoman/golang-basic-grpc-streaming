@@ -2,7 +2,6 @@ package connection
 
 import (
 	"context"
-	"log"
 	"sync"
 )
 
@@ -16,23 +15,23 @@ type Broadcaster struct {
 // to possibly several consumers (specified
 // via TargetFactory attribute)
 func (b *Broadcaster) Broadcast() {
-	log.Println("will broadcast data")
+	// log.Println("will broadcast data")
 	for {
 		select {
 		case <-b.Ctx.Done():
-			log.Println("broadcast context done")
+			// log.Println("broadcast context done")
 			return
 		case chunk := <-b.Producer:
-			log.Println("redirects to consumers:", string(chunk))
-			for i, target := range b.TargetFactory() {
+			// log.Println("redirects to consumers:", string(chunk))
+			for _, target := range b.TargetFactory() {
 				select {
 				case <-b.Ctx.Done():
-					log.Println("broadcast interrupted")
+					// log.Println("broadcast interrupted")
 					return
 				case target <- chunk:
-					log.Printf("redirected to %d chunk: %s\n", i, chunk)
+					// log.Printf("redirected to %d chunk: %s\n", i, chunk)
 				default:
-					log.Printf("skip redirect to %d chunk: %s\n", i, chunk)
+					// log.Printf("skip redirect to %d chunk: %s\n", i, chunk)
 				}
 			}
 		}
@@ -54,6 +53,7 @@ type connection struct {
 func (conn *connection) AddPeer(ch chan<- []byte) {
 	conn.Mu.Lock()
 	defer conn.Mu.Unlock()
+	// log.Println("add peer")
 	conn.Peers = append(conn.Peers, ch)
 }
 
@@ -65,7 +65,7 @@ func (conn *connection) RemovePeer(ch chan<- []byte) {
 		if peer == ch {
 			conn.Peers = remove(conn.Peers, i)
 			close(ch)
-			log.Println("removed peer")
+			// log.Println("removed peer")
 			return
 		}
 	}
@@ -93,17 +93,19 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 
 	proxy := &ChannelConnectionProxy{
 		Ctx:      proxyCtx,
+		RecvLock: &sync.RWMutex{},
+		SendLock: &sync.Mutex{},
 		SendChan: conn.SendChan,
 		RecvChan: connReciever,
 	}
-
-	proxyCancelLock := &sync.Mutex{}
 	hook := func() error {
 		// cancel context of this consumer
 		// and decrement barrier
 		// make sure to do this atomically
-		proxyCancelLock.Lock()
-		defer proxyCancelLock.Unlock()
+		proxy.SendLock.Lock()
+		proxy.RecvLock.Lock()
+		defer proxy.SendLock.Unlock()
+		defer proxy.RecvLock.Unlock()
 		if proxy.Done {
 			return ErrAlreadyClosed
 		}
@@ -215,7 +217,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// also, start monitoring errors from connection
 	go func(errChan <-chan error) {
 		if err, open := <-errChan; open && err != nil {
-			log.Printf("error with connection %s: %e\n", conn.Props.ID(), err)
+			// log.Printf("error with connection %s: %e\n", conn.Props.ID(), err)
 			_ = hook()
 		}
 	}(rawConn.ErrChan)
