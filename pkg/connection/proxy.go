@@ -3,7 +3,6 @@ package connection
 import (
 	"context"
 	"io"
-	"sync"
 	"time"
 )
 
@@ -13,8 +12,6 @@ import (
 // should be managed by the provider
 // and canceled in the cancelHook.
 type ChannelConnectionProxy struct {
-	SendLock   *sync.Mutex
-	RecvLock   *sync.RWMutex
 	Ctx        context.Context
 	SendChan   chan<- []byte
 	RecvChan   <-chan []byte
@@ -26,14 +23,6 @@ type ChannelConnectionProxy struct {
 // been canceled yet, then
 // try to recieve data.
 func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
-	// proxy.RecvLock.RLock()
-	// if proxy.Done {
-	// 	// to avoid unnesessary blocking
-	// 	proxy.RecvLock.RUnlock()
-	// 	return nil, io.EOF
-	// }
-	// proxy.RecvLock.RUnlock()
-
 	select {
 	case <-proxy.Ctx.Done():
 		break
@@ -57,14 +46,6 @@ func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 // been canceled yet, then
 // try to send data.
 func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
-	// proxy.SendLock.Lock()
-	// if proxy.Done {
-	// 	// to avoid unnesessary send to closed channel
-	// 	proxy.SendLock.Unlock()
-	// 	return ErrAlreadyClosed
-	// }
-	// proxy.SendLock.Unlock()
-
 	select {
 	case <-proxy.Ctx.Done():
 		return ErrAlreadyClosed
@@ -80,12 +61,10 @@ func (proxy *ChannelConnectionProxy) Send(p []byte, t time.Duration) error {
 
 // Execute the cancel hook
 func (proxy *ChannelConnectionProxy) Close() error {
-	proxy.SendLock.Lock()
-	if proxy.Done {
-		// to avoid unnesessary send to closed channel
-		proxy.SendLock.Unlock()
+	select {
+	case <-proxy.Ctx.Done():
 		return ErrAlreadyClosed
+	default:
+		return proxy.CancelHook()
 	}
-	proxy.SendLock.Unlock()
-	return proxy.CancelHook()
 }

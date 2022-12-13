@@ -94,19 +94,18 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 
 	proxy := &ChannelConnectionProxy{
 		Ctx:      proxyCtx,
-		RecvLock: &sync.RWMutex{},
-		SendLock: &sync.Mutex{},
 		SendChan: conn.SendChan,
 		RecvChan: connReciever,
 	}
+
+	closeLock := &sync.Mutex{}
 	hook := func() error {
 		// cancel context of this consumer
 		// and decrement barrier
 		// make sure to do this atomically
-		proxy.SendLock.Lock()
-		proxy.RecvLock.Lock()
-		defer proxy.SendLock.Unlock()
-		defer proxy.RecvLock.Unlock()
+		proxyCtxCancel()
+		closeLock.Lock()
+		defer closeLock.Unlock()
 		if proxy.Done {
 			return ErrAlreadyClosed
 		}
@@ -114,7 +113,6 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 		// the list of peers
 		conn.RemovePeer(connReciever)
 		proxy.Done = true
-		proxyCtxCancel()
 		conn.Barrier.Done()
 		return nil
 	}
