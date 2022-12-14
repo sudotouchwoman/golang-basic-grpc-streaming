@@ -21,23 +21,23 @@ func (b *Broadcaster) Broadcast() {
 	for {
 		select {
 		case <-b.Ctx.Done():
-			log.Println("broadcast context done")
+			// log.Println("broadcast context done")
 			return
 		case chunk, open := <-b.Producer:
 			if !open {
-				log.Println("producer closed")
+				// log.Println("producer closed")
 				return
 			}
-			log.Println("redirects to consumers:", string(chunk))
+			// log.Println("redirects to consumers:", string(chunk))
 			for _, target := range b.TargetFactory() {
 				select {
 				case <-b.Ctx.Done():
-					log.Println("broadcast interrupted")
+					// log.Println("broadcast interrupted")
 					return
 				case target <- chunk:
-					log.Printf("redirected chunk: %s\n", chunk)
+					// log.Printf("redirected chunk: %s\n", chunk)
 				default:
-					log.Printf("skip redirect chunk: %s\n", chunk)
+					// log.Printf("skip redirect chunk: %s\n", chunk)
 				}
 			}
 		}
@@ -74,7 +74,6 @@ func (conn *connection) RemovePeer(ch chan<- []byte) error {
 	if hook, exists := conn.Peers[ch]; exists {
 		log.Println("remove peer")
 		delete(conn.Peers, ch)
-		close(ch)
 		return hook()
 	}
 	return ErrAlreadyClosed
@@ -113,6 +112,7 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 			return ErrAlreadyClosed
 		}
 		log.Println("proxy cleanup")
+		close(connReciever)
 		proxy.Done = true
 		conn.Barrier.Done()
 		return nil
@@ -194,6 +194,12 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		connCtxCancel()
 		conn.Mu.Lock()
 		defer conn.Mu.Unlock()
+		// peer hooks are assumed to be
+		// panic-free as these might be called more
+		// than once (see NewProxy and proxyCancelHook)
+		for _, hook := range conn.Peers {
+			go hook()
+		}
 		// do not forget to clean up itself
 		// once done (so that subsequent
 		// calls to Open have no false positives)
