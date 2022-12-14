@@ -13,10 +13,17 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const (
+	ActionRead   = "read"
+	ActionCancel = "cancel"
+)
+
 func main() {
 	addr, emitter := "localhost:8080", "esp32"
+	action := ActionRead
 	flag.StringVar(&emitter, "e", emitter, "Emitter name")
 	flag.StringVar(&addr, "addr", addr, "gRPC Dial Address")
+	flag.StringVar(&action, "action", action, "gRPC method to call")
 	flag.Parse()
 
 	cc, err := grpc.Dial(
@@ -27,7 +34,16 @@ func main() {
 		log.Fatalf("failed to connect: %s", err)
 	}
 	defer cc.Close()
-	ListenForLogs(loggerpb.NewLoggerServiceClient(cc), emitter)
+	switch action {
+	case ActionRead:
+		ListenForLogs(loggerpb.NewLoggerServiceClient(cc), emitter)
+		return
+	case ActionCancel:
+		CloseLogStream(loggerpb.NewLoggerServiceClient(cc), emitter)
+		return
+	default:
+		log.Fatal("unknown action:", action)
+	}
 }
 
 func ListenForLogs(cl loggerpb.LoggerServiceClient, emitter string) {
@@ -53,5 +69,25 @@ func ListenForLogs(cl loggerpb.LoggerServiceClient, emitter string) {
 		}
 		log.Printf("[%s] - (%s)", msg.Emitter, msg.Msg)
 	}
+	log.Println("client finished")
+}
+
+func CloseLogStream(cl loggerpb.LoggerServiceClient, emitter string) {
+	// first draft
+	log.Println("connected to gRPC server, aims to close emitter")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := &loggerpb.LogStreamRequest{
+		Emitter:  emitter,
+		Client:   strconv.Itoa(os.Getpid()),
+		Baudrate: 115200,
+	}
+
+	record, err := cl.StopLogStream(ctx, req)
+	if err != nil {
+		log.Fatal("stop log stream:", err)
+	}
+	log.Printf("[%s] - (%s)", record.Emitter, record.Msg)
 	log.Println("client finished")
 }
