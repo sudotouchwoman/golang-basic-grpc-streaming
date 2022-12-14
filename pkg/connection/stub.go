@@ -10,7 +10,7 @@ import (
 type Broadcaster struct {
 	Ctx           context.Context
 	Producer      <-chan []byte
-	TargetFactory func() []chan<- []byte
+	TargetFactory func() PeersSlice
 }
 
 // Propagates updates from single producer
@@ -21,28 +21,32 @@ func (b *Broadcaster) Broadcast() {
 	for {
 		select {
 		case <-b.Ctx.Done():
-			// log.Println("broadcast context done")
+			log.Println("broadcast context done")
 			return
 		case chunk, open := <-b.Producer:
 			if !open {
-				// log.Println("producer closed")
+				log.Println("producer closed")
 				return
 			}
-			// log.Println("redirects to consumers:", string(chunk))
+			log.Println("redirects to consumers:", string(chunk))
 			for _, target := range b.TargetFactory() {
 				select {
 				case <-b.Ctx.Done():
-					// log.Println("broadcast interrupted")
+					log.Println("broadcast interrupted")
 					return
 				case target <- chunk:
-					// log.Printf("redirected to %d chunk: %s\n", i, chunk)
+					log.Printf("redirected chunk: %s\n", chunk)
 				default:
-					// log.Printf("skip redirect to %d chunk: %s\n", i, chunk)
+					log.Printf("skip redirect chunk: %s\n", chunk)
 				}
 			}
 		}
 	}
 }
+
+type PeersSlice []chan<- []byte
+type PeersMap map[chan<- []byte]CloserHook
+type CloserHook func() error
 
 // Represents active connection monitored by provider
 type connection struct {
@@ -51,36 +55,29 @@ type connection struct {
 	Barrier   *sync.WaitGroup
 	Props     ConnectionProps
 	SendChan  chan<- []byte
-	Peers     []chan<- []byte
+	Peers     PeersMap
 	CloseHook func() error
 }
 
 // Add listener channel to the slice
-func (conn *connection) AddPeer(ch chan<- []byte) {
+func (conn *connection) AddPeer(ch chan<- []byte, hook CloserHook) {
 	conn.Mu.Lock()
 	defer conn.Mu.Unlock()
-	// log.Println("add peer")
-	conn.Peers = append(conn.Peers, ch)
+	log.Println("add peer")
+	conn.Peers[ch] = hook
 }
 
 // Delete listener channel from the slice
-func (conn *connection) RemovePeer(ch chan<- []byte) {
+func (conn *connection) RemovePeer(ch chan<- []byte) error {
 	conn.Mu.Lock()
 	defer conn.Mu.Unlock()
-	for i, peer := range conn.Peers {
-		if peer == ch {
-			conn.Peers = remove(conn.Peers, i)
-			close(ch)
-			// log.Println("removed peer")
-			return
-		}
+	if hook, exists := conn.Peers[ch]; exists {
+		log.Println("remove peer")
+		delete(conn.Peers, ch)
+		close(ch)
+		return hook()
 	}
-}
-
-// Helper function to drop element from slice
-func remove(s []chan<- []byte, i int) []chan<- []byte {
-	s[i] = s[len(s)-1]
-	return s[:len(s)-1]
+	return ErrAlreadyClosed
 }
 
 // Creates new proxy from this connection.
@@ -95,42 +92,40 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 	// for this request
 	// (leave some space so that lines don't get skipped)
 	connReciever := make(chan []byte, 10)
-	conn.AddPeer(connReciever)
 
 	proxy := &ChannelConnectionProxy{
 		Ctx:      proxyCtx,
 		SendChan: conn.SendChan,
 		RecvChan: connReciever,
 	}
+	proxy.CancelHook = func() error {
+		// remove this proxy from consumers
+		// close its channel
+		return conn.RemovePeer(connReciever)
+	}
 
 	closeLock := &sync.Mutex{}
-	proxyCancelHook := func() error {
-		// cancel context of this consumer
-		// and decrement barrier
-		// make sure to do this atomically
+	conn.AddPeer(connReciever, func() error {
 		proxyCtxCancel()
 		closeLock.Lock()
 		defer closeLock.Unlock()
 		if proxy.Done {
 			return ErrAlreadyClosed
 		}
-		// we should also remove the peer from
-		// the list of peers
-		conn.RemovePeer(connReciever)
+		log.Println("proxy cleanup")
 		proxy.Done = true
 		conn.Barrier.Done()
 		return nil
-	}
-	proxy.CancelHook = proxyCancelHook
+	})
 
 	// once parent context is done,
 	// underlying connections should be closed too
-	go func(ctx context.Context) {
-		<-ctx.Done()
-		log.Println("silently cancels proxy")
-		// close silently
-		_ = proxyCancelHook()
-	}(conn.Ctx)
+	// go func(ctx context.Context) {
+	// 	<-ctx.Done()
+	// 	log.Println("silently cancels proxy")
+	// 	// close silently
+	// 	_ = proxyCancelHook()
+	// }(conn.Ctx)
 	return proxy, nil
 }
 
@@ -165,13 +160,13 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		// it might be a good idea to compare other properties
 		// before new proxy creation
 		if !conn.Props.Compatible(props) {
-			log.Println("existing connection props are incompatible")
+			log.Println(id, "existing connection props are incompatible")
 			return nil, ErrIncompatibleProps
 		}
-		log.Println("reuses existing connection")
+		log.Println(id, "reuses existing connection")
 		return conn.NewProxy()
 	}
-	log.Println("connection will be opened")
+	log.Println(id, "connection will be opened")
 
 	// such connection does not exist yet thus must be created
 	// get channels from somewhere
@@ -189,7 +184,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		Barrier:  group,
 		Props:    props,
 		SendChan: rawConn.WriterChan,
-		Peers:    []chan<- []byte{},
+		Peers:    map[chan<- []byte]CloserHook{},
 	}
 
 	// connCloseHook needs a closure for the connection
@@ -203,8 +198,8 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		// once done (so that subsequent
 		// calls to Open have no false positives)
 		pr.mu.Lock()
-		delete(pr.connections, id)
 		defer pr.mu.Unlock()
+		delete(pr.connections, id)
 		log.Println("unregistered conn", id)
 		return rawConn.CloseHook()
 	}
@@ -213,10 +208,23 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	broadcaster := &Broadcaster{
 		Ctx:      connCtx,
 		Producer: rawConn.ReaderChan,
-		TargetFactory: func() []chan<- []byte {
+		TargetFactory: func() PeersSlice {
+			// convert map to slice. this is required because
+			// returned map could be modified from another goroutine
+			// but we still want to achieve minimal locking
+			// targets slice allocation is a subject of minor optimization
+			// note that initially there was a possible goroutine leak
+			// because each proxy spawned a listener which
+			// would only return once the connection is closed
+			// (when single connection is shared by many clients, this
+			// can lead to a leak)
 			conn.Mu.RLock()
 			defer conn.Mu.RUnlock()
-			return conn.Peers
+			targets := make(PeersSlice, 0, len(conn.Peers))
+			for t := range conn.Peers {
+				targets = append(targets, t)
+			}
+			return targets
 		},
 	}
 	// start redirecting messages
