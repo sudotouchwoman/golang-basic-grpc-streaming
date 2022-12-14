@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -55,11 +56,15 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 		// released in this goroutine
 		// as this is the one sending to channel
 		ticker := time.NewTicker(tf.Period)
+		timer := time.NewTimer(tf.Period * 3)
 		defer func() {
 			close(reader)
 			ticker.Stop()
+			timer.Stop()
 		}()
 
+		// perform several ticks and close
+		// the connection afterwards
 		for {
 			select {
 			case <-connCtx.Done():
@@ -68,6 +73,10 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 			case <-ticker.C:
 				log.Println(p.ID(), "Ticked")
 				reader <- []byte("Ticked!")
+			case <-timer.C:
+				log.Println("emulates disconnect")
+				errChan <- io.EOF
+				continue
 			}
 		}
 	}()

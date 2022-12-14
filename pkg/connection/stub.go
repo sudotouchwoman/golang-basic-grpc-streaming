@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"io"
 	"log"
 	"sync"
 )
@@ -14,7 +15,7 @@ type Broadcaster struct {
 
 // Propagates updates from single producer
 // to possibly several consumers (specified
-// via TargetFactory attribute)
+// via TargetFactory attribute).
 func (b *Broadcaster) Broadcast() {
 	// log.Println("will broadcast data")
 	for {
@@ -22,7 +23,11 @@ func (b *Broadcaster) Broadcast() {
 		case <-b.Ctx.Done():
 			// log.Println("broadcast context done")
 			return
-		case chunk := <-b.Producer:
+		case chunk, open := <-b.Producer:
+			if !open {
+				// log.Println("producer closed")
+				return
+			}
 			// log.Println("redirects to consumers:", string(chunk))
 			for _, target := range b.TargetFactory() {
 				select {
@@ -221,8 +226,10 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// also, start monitoring errors from connection
 	go func(errChan <-chan error) {
 		if err, open := <-errChan; open && err != nil {
-			log.Printf("error with connection %s: %e\n", id, err)
 			_ = connCloseHook()
+			if err != io.EOF {
+				log.Printf("error with connection %s: %v\n", id, err)
+			}
 		}
 		// log.Println("no errors with this connection", id)
 	}(rawConn.ErrChan)

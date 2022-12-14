@@ -72,19 +72,20 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 		}
 	}
 	// cleanup once connection is closed or reset
-	defer func() {
-		log.Println("closing proxy")
-		if err := proxy.Close(); err != nil {
-			log.Println("Proxy.Close()=", err)
-		}
-	}()
+	defer proxy.Close()
 	for {
 		// quite a long timeout for now
 		record, err := proxy.Recv(time.Minute)
-		// TODO: check for EOF and handle it
-		// accordingly (notify client)
 		if err == io.EOF {
-			log.Println(req.Emitter, "connection exhausted")
+			// log.Println(req.Emitter, "connection exhausted")
+			sendErr := stream.Send(&loggerpb.LogRecord{
+				Msg:     "connection exhausted",
+				Emitter: req.Emitter,
+				Success: false,
+			})
+			if sendErr != nil {
+				return sendErr
+			}
 			return nil
 		}
 		if err != nil {

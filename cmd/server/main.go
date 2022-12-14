@@ -28,7 +28,7 @@ func main() {
 
 	// create providers for log streaming
 	provider := connection.NewConnctionProvider(
-		rootCtx, server.NewTickerFactory(rootCtx, 5*time.Second),
+		rootCtx, server.NewTickerFactory(rootCtx, 2*time.Second),
 	)
 
 	// create and register server

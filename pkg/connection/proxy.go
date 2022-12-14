@@ -3,7 +3,6 @@ package connection
 import (
 	"context"
 	"io"
-	"log"
 	"time"
 )
 
@@ -26,7 +25,7 @@ type ChannelConnectionProxy struct {
 func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 	select {
 	case <-proxy.Ctx.Done():
-		log.Println("proxy context done")
+		// log.Println("proxy context done")
 		break
 	default:
 		select {
@@ -36,7 +35,7 @@ func (proxy *ChannelConnectionProxy) Recv(t time.Duration) ([]byte, error) {
 			if open {
 				return got, nil
 			}
-			log.Println("proxy recv chan closed")
+			// log.Println("proxy recv chan closed")
 			break
 		case <-time.After(t):
 			return nil, ErrTimedOut
