@@ -78,34 +78,24 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 		record, err := proxy.Recv(time.Minute)
 		if err == io.EOF {
 			// log.Println(req.Emitter, "connection exhausted")
-			sendErr := stream.Send(&loggerpb.LogRecord{
+			return stream.Send(&loggerpb.LogRecord{
 				Msg:     "connection exhausted",
 				Emitter: req.Emitter,
-				Success: false,
 			})
-			if sendErr != nil {
-				return sendErr
-			}
-			return nil
 		}
 		if err != nil {
 			log.Println("error while reading from proxy", err)
-			sendErr := stream.Send(&loggerpb.LogRecord{
+			_ = stream.Send(&loggerpb.LogRecord{
 				Msg:     fmt.Sprintf("connection error: %s", err),
 				Emitter: req.Emitter,
-				Success: false,
 			})
-			if sendErr != nil {
-				return sendErr
-			}
 			return err
 		}
-		sendErr := stream.Send(&loggerpb.LogRecord{
+		if sendErr := stream.Send(&loggerpb.LogRecord{
 			Msg:     string(record),
 			Emitter: req.Emitter,
 			Success: true,
-		})
-		if sendErr != nil {
+		}); sendErr != nil {
 			return sendErr
 		}
 	}

@@ -10,7 +10,7 @@ import (
 type Broadcaster struct {
 	Ctx           context.Context
 	Producer      <-chan []byte
-	TargetFactory func() PeersSlice
+	TargetFactory func() PeersMap
 }
 
 // Propagates updates from single producer
@@ -18,6 +18,17 @@ type Broadcaster struct {
 // via TargetFactory attribute).
 func (b *Broadcaster) Broadcast() {
 	// log.Println("will broadcast data")
+	defer func() {
+		log.Println("stopped broadcasting")
+		for ch, hook := range b.TargetFactory() {
+			// peer hooks are assumed to be
+			// panic-free as these might be called more
+			// than once (see NewProxy and proxyCancelHook)
+			close(ch)
+			go hook()
+		}
+	}()
+
 	for {
 		select {
 		case <-b.Ctx.Done():
@@ -29,7 +40,7 @@ func (b *Broadcaster) Broadcast() {
 				return
 			}
 			// log.Println("redirects to consumers:", string(chunk))
-			for _, target := range b.TargetFactory() {
+			for target := range b.TargetFactory() {
 				select {
 				case <-b.Ctx.Done():
 					// log.Println("broadcast interrupted")
@@ -74,6 +85,7 @@ func (conn *connection) RemovePeer(ch chan<- []byte) error {
 	if hook, exists := conn.Peers[ch]; exists {
 		log.Println("remove peer")
 		delete(conn.Peers, ch)
+		close(ch)
 		return hook()
 	}
 	return ErrAlreadyClosed
@@ -112,7 +124,6 @@ func (conn *connection) NewProxy() (ConnectionProxy, error) {
 			return ErrAlreadyClosed
 		}
 		log.Println("proxy cleanup")
-		close(connReciever)
 		proxy.Done = true
 		conn.Barrier.Done()
 		return nil
@@ -194,12 +205,6 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 		connCtxCancel()
 		conn.Mu.Lock()
 		defer conn.Mu.Unlock()
-		// peer hooks are assumed to be
-		// panic-free as these might be called more
-		// than once (see NewProxy and proxyCancelHook)
-		for _, hook := range conn.Peers {
-			go hook()
-		}
 		// do not forget to clean up itself
 		// once done (so that subsequent
 		// calls to Open have no false positives)
@@ -214,7 +219,7 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	broadcaster := &Broadcaster{
 		Ctx:      connCtx,
 		Producer: rawConn.ReaderChan,
-		TargetFactory: func() PeersSlice {
+		TargetFactory: func() PeersMap {
 			// convert map to slice. this is required because
 			// returned map could be modified from another goroutine
 			// but we still want to achieve minimal locking
@@ -226,9 +231,9 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 			// can lead to a leak)
 			conn.Mu.RLock()
 			defer conn.Mu.RUnlock()
-			targets := make(PeersSlice, 0, len(conn.Peers))
-			for t := range conn.Peers {
-				targets = append(targets, t)
+			targets := make(PeersMap, len(conn.Peers))
+			for t, hook := range conn.Peers {
+				targets[t] = hook
 			}
 			return targets
 		},

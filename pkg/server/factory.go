@@ -56,7 +56,7 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 		// released in this goroutine
 		// as this is the one sending to channel
 		ticker := time.NewTicker(tf.Period)
-		timer := time.NewTimer(tf.Period * 3)
+		timer := time.NewTimer(tf.Period * 5)
 		defer func() {
 			close(reader)
 			ticker.Stop()
