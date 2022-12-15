@@ -19,7 +19,7 @@ const (
 )
 
 func main() {
-	addr, emitter := "localhost:8080", "esp32"
+	addr, emitter := "localhost:8080", "/dev/ttyUSB0"
 	action := ActionRead
 	flag.StringVar(&emitter, "e", emitter, "Emitter name")
 	flag.StringVar(&addr, "addr", addr, "gRPC Dial Address")

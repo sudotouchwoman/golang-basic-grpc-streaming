@@ -5,10 +5,11 @@ import (
 	"flag"
 	"log"
 	"net"
-	"time"
+	"sync"
 
 	"github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/connection"
 	loggerpb "github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/logger"
+	"github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/serial"
 	"github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/server"
 	"google.golang.org/grpc"
 )
@@ -20,7 +21,7 @@ func main() {
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("failed to listen: %e", err)
+		log.Fatalln("failed to listen:", err)
 	}
 
 	rootCtx, rootCtxCancel := context.WithCancel(context.Background())
@@ -28,7 +29,10 @@ func main() {
 
 	// create providers for log streaming
 	provider := connection.NewConnctionProvider(
-		rootCtx, server.NewTickerFactory(rootCtx, 2*time.Second),
+		rootCtx, &serial.SerialConnectionFactory{
+			Mu:  &sync.RWMutex{},
+			Ctx: rootCtx,
+		},
 	)
 
 	// create and register server
@@ -37,6 +41,6 @@ func main() {
 	log.Println("gRPC server starting...")
 
 	if err = s.Serve(listener); err != nil {
-		log.Fatalf("failed to serve: %e", err)
+		log.Fatalln("failed to serve:", err)
 	}
 }

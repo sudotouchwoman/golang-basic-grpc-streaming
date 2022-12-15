@@ -62,20 +62,17 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 	proxy, err := logSrv.Provider.Open(&props)
 	if err != nil {
 		log.Println("failed to open:", err)
-		sendErr := stream.Send(&loggerpb.LogRecord{
+		return stream.Send(&loggerpb.LogRecord{
 			Msg:     fmt.Sprintf("failed to establish requested connection: %s", err),
 			Emitter: req.Emitter,
 			Success: false,
 		})
-		if sendErr != nil {
-			return sendErr
-		}
 	}
 	// cleanup once connection is closed or reset
 	defer proxy.Close()
 	for {
 		// quite a long timeout for now
-		record, err := proxy.Recv(time.Minute)
+		record, err := proxy.Recv(10 * time.Second)
 		if err == io.EOF {
 			// log.Println(req.Emitter, "connection exhausted")
 			return stream.Send(&loggerpb.LogRecord{
@@ -85,11 +82,10 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 		}
 		if err != nil {
 			log.Println("error while reading from proxy", err)
-			_ = stream.Send(&loggerpb.LogRecord{
+			return stream.Send(&loggerpb.LogRecord{
 				Msg:     fmt.Sprintf("connection error: %s", err),
 				Emitter: req.Emitter,
 			})
-			return err
 		}
 		if sendErr := stream.Send(&loggerpb.LogRecord{
 			Msg:     string(record),

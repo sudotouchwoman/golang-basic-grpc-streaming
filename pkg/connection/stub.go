@@ -243,6 +243,8 @@ func (pr *ConnectionProvider) Open(props ConnectionProps) (ConnectionProxy, erro
 	// for them
 	go broadcaster.Broadcast()
 	// also, start monitoring errors from connection
+	// it might be a good idea to redirect this error to all
+	// clients somehow as for now all they see is connection exhausted
 	go func(errChan <-chan error) {
 		if err, open := <-errChan; open && err != nil {
 			_ = connCloseHook()
