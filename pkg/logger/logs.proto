@@ -19,10 +19,14 @@ message LogStreamRequest {
   string emitter = 1;
   string client = 2;
   uint32 baudrate = 3;
+  int64 timeout = 4;
 }
+
+message EmptyRequest {}
 
 service LoggerService {
   // server streaming
   rpc GetLogStream(LogStreamRequest) returns (stream LogRecord);
   rpc StopLogStream(LogStreamRequest) returns (LogRecord);
+  rpc GetAccessibleStreams(EmptyRequest) returns (stream LogRecord);
 }

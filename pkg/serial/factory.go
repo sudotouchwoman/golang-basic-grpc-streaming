@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/connection"
 	"github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/server"
@@ -41,6 +42,7 @@ func (sf *SerialConnectionFactory) NewWithProps(props connection.ConnectionProps
 		log.Println("serial.Open():", err)
 		return
 	}
+	com.SetReadTimeout(time.Duration(p.ReadTimeout))
 	log.Println(p.Emitter, "opened serial connection")
 
 	serialCtx, serialCtxCancel := context.WithCancel(sf.Ctx)
@@ -92,7 +94,7 @@ func (sf *SerialConnectionFactory) ListAccessible() []connection.ConnID {
 		log.Println("ListAccessible:", err)
 		return []connection.ConnID{}
 	}
-	ids := make([]connection.ConnID, 0, len(ports))
+	ids := make([]connection.ConnID, len(ports))
 	for i, port := range ports {
 		ids[i] = connection.ConnID(port)
 	}

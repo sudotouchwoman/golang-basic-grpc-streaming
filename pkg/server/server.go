@@ -11,10 +11,12 @@ import (
 	loggerpb "github.com/sudotouchwoman/golang-basic-grpc-streaming/pkg/logger"
 )
 
+const defaultClientTimeout = 30 * time.Second
+
 type LogStreamProps struct {
-	Emitter  string
-	Baudrate uint32
-	Client   string
+	Emitter     string
+	Baudrate    uint32
+	ReadTimeout int64
 }
 
 func (lp *LogStreamProps) ID() connection.ConnID {
@@ -52,12 +54,17 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 		// sleep for a bit
 		time.Sleep(1e2 * time.Millisecond)
 	}
+	// in case
+	if req.Timeout == 0 {
+		log.Printf("no timeout specified, using default (%s)\n", defaultClientTimeout)
+		req.Timeout = int64(defaultClientTimeout)
+	}
 	// after dummy messages sent,
 	// try to create a connection to the given emitter
 	props := LogStreamProps{
 		req.Emitter,
 		req.Baudrate,
-		req.Client,
+		req.Timeout,
 	}
 	proxy, err := logSrv.Provider.Open(&props)
 	if err != nil {
@@ -72,7 +79,7 @@ func (logSrv *LogStreamerServer) GetLogStream(req *loggerpb.LogStreamRequest, st
 	defer proxy.Close()
 	for {
 		// quite a long timeout for now
-		record, err := proxy.Recv(10 * time.Second)
+		record, err := proxy.Recv(time.Duration(props.ReadTimeout))
 		if err == io.EOF {
 			// log.Println(req.Emitter, "connection exhausted")
 			return stream.Send(&loggerpb.LogRecord{
@@ -114,4 +121,23 @@ func (logSrv *LogStreamerServer) StopLogStream(ctx context.Context, req *loggerp
 		Emitter: req.Emitter,
 		Success: true,
 	}, nil
+}
+
+func (logSrv *LogStreamerServer) GetAccessibleStreams(req *loggerpb.EmptyRequest, stream loggerpb.LoggerService_GetAccessibleStreamsServer) error {
+	log.Printf("GetAccessibleStreams method invoked with request: %v\n", req)
+	// some dummy emits at first, emulate time-consuming preprocessing
+	// cleanup once connection is closed or reset
+	ports := logSrv.Provider.ListAccessible()
+	if len(ports) == 0 {
+		return stream.Send(&loggerpb.LogRecord{})
+	}
+	for _, port := range ports {
+		if err := stream.Send(&loggerpb.LogRecord{
+			Emitter: string(port),
+			Success: true,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
