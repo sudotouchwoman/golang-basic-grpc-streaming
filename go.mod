@@ -11,6 +11,7 @@ require github.com/creack/goselect v0.1.2 // indirect
 
 require (
 	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.5.0
 	go.bug.st/serial v1.4.1
 	golang.org/x/net v0.0.0-20220722155237-a158d28d115b // indirect

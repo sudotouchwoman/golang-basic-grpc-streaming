@@ -72,7 +72,7 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 				return
 			case <-ticker.C:
 				log.Println(p.ID(), "Ticked")
-				reader <- []byte("Ticked!")
+				reader <- []byte(p.ID() + "Ticked!")
 			case <-timer.C:
 				log.Println("emulates disconnect")
 				errChan <- io.EOF

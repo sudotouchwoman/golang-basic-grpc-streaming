@@ -11,6 +11,9 @@ import (
 )
 
 func main() {
+	// go.bug.st/serial library demo. Connect to a
+	// given serial port and listen
+	// TODO: add support for writing to serial
 	port := "/dev/ttyUSB0"
 	flag.StringVar(&port, "com", port, "Serial port name")
 	flag.Parse()
