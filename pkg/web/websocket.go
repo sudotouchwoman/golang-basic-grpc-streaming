@@ -15,12 +15,14 @@ import (
 
 const (
 	MethodRead     = "read"
+	MethodStop     = "stop"
 	MethodDiscover = "discover"
 )
 
 var (
-	ErrMethodInvaid = errors.New("this method is not supported")
-	ErrContextDone  = errors.New("socket handlers factory context done")
+	ErrConnectionClosed = errors.New("connection closed already")
+	ErrMethodInvaid     = errors.New("this method is not supported")
+	ErrContextDone      = errors.New("socket handlers factory context done")
 )
 
 // SockHandlerFactory implementation. Produces LogSockClients
@@ -40,12 +42,14 @@ func (f *LogSockClientFactory) New(conn *websocket.Conn) SockHandler {
 		return nil
 	default:
 		return &LogSockClient{
-			Wg:         &sync.WaitGroup{},
-			Ctx:        f.Ctx,
-			Conn:       conn,
-			WriterChan: make(chan []byte, 10),
-			Timeout:    f.ReadTimeout,
-			Provider:   f.Provider,
+			Wg:              &sync.WaitGroup{},
+			Mu:              &sync.Mutex{},
+			Ctx:             f.Ctx,
+			Conn:            conn,
+			WriterChan:      make(chan []byte, 10),
+			Timeout:         f.ReadTimeout,
+			Provider:        f.Provider,
+			OpenConnections: map[string]connection.ConnectionProxy{},
 		}
 	}
 }
@@ -53,12 +57,14 @@ func (f *LogSockClientFactory) New(conn *websocket.Conn) SockHandler {
 // SockHandler implementation. Configured with a connection provider,
 // dispatches websocket messages from clients.
 type LogSockClient struct {
-	Ctx        context.Context
-	Conn       *websocket.Conn
-	Wg         *sync.WaitGroup
-	WriterChan chan []byte
-	Timeout    time.Duration
-	Provider   connection.Provider
+	Ctx             context.Context
+	Conn            *websocket.Conn
+	Wg              *sync.WaitGroup
+	WriterChan      chan []byte
+	Timeout         time.Duration
+	Provider        connection.Provider
+	Mu              *sync.Mutex
+	OpenConnections map[string]connection.ConnectionProxy
 }
 
 // This method blocks until client disconnects. It listens
@@ -72,7 +78,7 @@ func (cl *LogSockClient) Read() {
 	defer func() {
 		cl.Wg.Wait()
 		close(cl.WriterChan)
-		log.Println("cleaned up after client")
+		log.Println("cleaned up after client disconnected")
 	}()
 
 	buf := SerialRequest{}
@@ -127,6 +133,8 @@ func (cl *LogSockClient) Handle(Ctx context.Context, r SerialRequest) {
 		cl.handleRead(Ctx, r)
 	case MethodDiscover:
 		cl.handleSerialDiscover()
+	case MethodStop:
+		cl.handleStop(r.Serial)
 	default:
 		cl.WriterChan <- JsonifyError(ErrMethodInvaid, "")
 	}
@@ -141,6 +149,20 @@ func (cl *LogSockClient) handleSerialDiscover() {
 		log.Fatalln(err)
 	}
 	cl.WriterChan <- msg
+}
+
+func (cl *LogSockClient) handleStop(name string) {
+	cl.Mu.Lock()
+	defer cl.Mu.Unlock()
+	if conn, exists := cl.OpenConnections[name]; exists {
+		log.Println("client asked to stop", name)
+		delete(cl.OpenConnections, name)
+		if err := conn.Close(); err != nil {
+			cl.WriterChan <- JsonifyError(err, name)
+		}
+		return
+	}
+	cl.WriterChan <- JsonifyError(ErrConnectionClosed, name)
 }
 
 // used to write messages associated with this request
@@ -160,6 +182,11 @@ func (cl *LogSockClient) handleRead(Ctx context.Context, r SerialRequest) {
 		return
 	}
 	defer proxy.Close()
+	// save this connection to be closable
+	// by client
+	cl.Mu.Lock()
+	cl.OpenConnections[r.Serial] = proxy
+	cl.Mu.Unlock()
 
 	for {
 		select {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +16,10 @@ func main() {
 	// sample websocket client (used as a demo and for debugging)
 	// this one performs a single action: discovers connections
 	// or reads from a one
+	method := web.MethodRead
+	flag.StringVar(&method, "action", method, "Read/close/discover")
+	flag.Parse()
+
 	done := make(chan bool)
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
@@ -58,19 +63,42 @@ func main() {
 					log.Println("err in unmarshal:", err)
 					return
 				}
-				if err, ok := response["error"]; ok {
-					log.Println("server:", err)
-					return
-				}
+				// if err, ok := response["error"]; ok {
+				// 	log.Println("server:", err)
+				// 	return
+				// }
 			}
 		}
 	}()
 
+	request := web.SerialRequest{
+		Method:  method,
+		Timeout: int64(10 * time.Second),
+		BasicSerialMessage: web.BasicSerialMessage{
+			Serial: "/dev/ttyUSB0",
+		},
+	}
+
 	// as discussed in the comments above,
 	// perform a single action (here, read stream of data)
+	if err = conn.WriteJSON(&request); err != nil {
+		log.Fatal("ws write:", err)
+	}
+
+	// also connect to another producer
+	// data should be sent from both
+	request.Serial = "/dev/ttyUSB2"
+	if err = conn.WriteJSON(&request); err != nil {
+		log.Fatal("ws write:", err)
+	}
+	// ask server to stop listening for /dev/ttyUSB0 after 10s
+	// client still won't stop because it is still listening for /dev/ttyUSB2
+	<-time.After(10 * time.Second)
 	if err = conn.WriteJSON(&web.SerialRequest{
-		Method:  web.MethodRead,
-		Timeout: int64(10 * time.Second),
+		Method: web.MethodStop,
+		BasicSerialMessage: web.BasicSerialMessage{
+			Serial: "/dev/ttyUSB0",
+		},
 	}); err != nil {
 		log.Fatal("ws write:", err)
 	}
