@@ -19,7 +19,7 @@ type SerialConnection struct {
 	//  but this property is public thus can be modified by
 	// the caller later (please note that modifying makes
 	// no sense once the connection starts scanning)
-	io.ReadWriteCloser
+	io.ReadWriter
 	Props         *server.LogStreamProps
 	Tokenizer     bufio.SplitFunc
 	WriterChannel <-chan []byte
@@ -36,7 +36,7 @@ func (ss *SerialConnection) Listen() {
 	// reader subroutine
 	// will scan the port and redirect updates to the channel
 	go func() {
-		scanner := bufio.NewScanner(ss.ReadWriteCloser)
+		scanner := bufio.NewScanner(ss.ReadWriter)
 		scanner.Split(ss.Tokenizer)
 		// cleanup resources
 		// once done
@@ -84,7 +84,7 @@ func (ss *SerialConnection) Listen() {
 					return
 				}
 				log.Println(id, string(chunk))
-				if _, err := ss.ReadWriteCloser.Write(chunk); err != nil {
+				if _, err := ss.ReadWriter.Write(chunk); err != nil {
 					log.Println(id, "write err:", err)
 				}
 			}

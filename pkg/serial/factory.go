@@ -72,13 +72,13 @@ func (sf *SerialConnectionFactory) NewWithProps(props connection.ConnectionProps
 	// this entity handles com-port communication
 	// by using channels RawConnection stores
 	serialConn := SerialConnection{
-		ReadWriteCloser: com,
-		Ctx:             serialCtx,
-		Props:           p,
-		Tokenizer:       bufio.ScanLines,
-		WriterChannel:   writer,
-		ReaderChannel:   reader,
-		ErrChannel:      errChan,
+		ReadWriter:    com,
+		Ctx:           serialCtx,
+		Props:         p,
+		Tokenizer:     bufio.ScanLines,
+		WriterChannel: writer,
+		ReaderChannel: reader,
+		ErrChannel:    errChan,
 	}
 	// start listening for incoming records
 	go serialConn.Listen()
