@@ -23,6 +23,8 @@ var (
 	ErrContextDone  = errors.New("socket handlers factory context done")
 )
 
+// SockHandlerFactory implementation. Produces LogSockClients
+// configured with timeouts and provider
 type LogSockClientFactory struct {
 	Ctx         context.Context
 	Provider    connection.Provider
@@ -48,10 +50,12 @@ func (f *LogSockClientFactory) New(conn *websocket.Conn) SockHandler {
 	}
 }
 
+// SockHandler implementation. Configured with a connection provider,
+// dispatches websocket messages from clients.
 type LogSockClient struct {
-	Wg         *sync.WaitGroup
 	Ctx        context.Context
 	Conn       *websocket.Conn
+	Wg         *sync.WaitGroup
 	WriterChan chan []byte
 	Timeout    time.Duration
 	Provider   connection.Provider
@@ -68,7 +72,7 @@ func (cl *LogSockClient) Read() {
 	defer func() {
 		cl.Wg.Wait()
 		close(cl.WriterChan)
-		log.Println("closed send chan")
+		log.Println("cleaned up after client")
 	}()
 
 	buf := SerialRequest{}
@@ -94,6 +98,7 @@ func (cl *LogSockClient) Read() {
 			cl.WriterChan <- JsonifyError(err, buf.Serial)
 			continue
 		}
+		cl.Wg.Add(1)
 		// process parsed message, try to establish connection
 		go cl.Handle(peersContext, buf)
 	}
@@ -115,7 +120,6 @@ func (cl *LogSockClient) Write() {
 // other methods. Note that this method blocks WaitGroup to prevent
 // Read() method from closing the channel handlers might write to.
 func (cl *LogSockClient) Handle(Ctx context.Context, r SerialRequest) {
-	cl.Wg.Add(1)
 	defer cl.Wg.Done()
 
 	switch r.Method {
@@ -129,9 +133,8 @@ func (cl *LogSockClient) Handle(Ctx context.Context, r SerialRequest) {
 }
 
 func (cl *LogSockClient) handleSerialDiscover() {
-	discovered := cl.Provider.ListAccessible()
 	msg, err := json.Marshal(&DiscoverySerialMessage{
-		Serials: discovered,
+		Serials: cl.Provider.ListAccessible(),
 		Iat:     time.Now(),
 	})
 	if err != nil {
@@ -141,6 +144,8 @@ func (cl *LogSockClient) handleSerialDiscover() {
 }
 
 // used to write messages associated with this request
+// blocks, but when provided with a sufficient read timeout,
+// eventually returns (after client releases the context).
 func (cl *LogSockClient) handleRead(Ctx context.Context, r SerialRequest) {
 	buf := BasicSerialMessage{
 		Serial: r.Serial,
@@ -159,24 +164,25 @@ func (cl *LogSockClient) handleRead(Ctx context.Context, r SerialRequest) {
 	for {
 		select {
 		case <-Ctx.Done():
-			log.Println(buf.Serial, "peer disconnected")
+			// client might have disconnected
+			// thus keeping this connection is no longer needed
 			return
 		default:
 			// block on recieve
 			// inform user if any error is encountered
-			recv, err := proxy.Recv(time.Duration(r.Timeout) * time.Second)
+			recv, err := proxy.Recv(time.Duration(cl.Timeout))
 			if err != nil {
+				log.Println("proxy read:", err)
 				cl.WriterChan <- JsonifyError(err, r.Serial)
 				return
 			}
 			// pass obtained record
-			buf.Message = recv
+			buf.Message = string(recv)
 			buf.Iat = time.Now()
 			if msg, err := json.Marshal(&buf); err == nil {
+				log.Println(string(msg))
 				cl.WriterChan <- msg
-				continue
 			}
-			return
 		}
 	}
 }

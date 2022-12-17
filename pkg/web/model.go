@@ -29,9 +29,9 @@ type SerialRequest struct {
 
 // Response format of ws server
 type BasicSerialMessage struct {
-	Message json.RawMessage `json:"message"`
-	Serial  string          `json:"serial"`
-	Iat     time.Time       `json:"iat"`
+	Message string    `json:"message"`
+	Serial  string    `json:"serial"`
+	Iat     time.Time `json:"iat"`
 }
 
 type DiscoverySerialMessage struct {
@@ -52,5 +52,6 @@ func JsonifyError(err error, serial string) []byte {
 	if err != nil {
 		log.Fatalln("marshal:", err)
 	}
+	log.Println("jsonify:", string(msg))
 	return msg
 }
