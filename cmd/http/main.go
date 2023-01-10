@@ -21,8 +21,12 @@ func main() {
 
 	// provider - gRPC client implementation
 	// (for now, a mock factory is used)
-	provider := connection.NewConnctionProvider(
-		ctx, server.NewTickerFactory(ctx, 2*time.Second),
+	tickerFactory := server.NewTickerFactory(ctx, 2*time.Second)
+	for _, dev := range []connection.ConnID{"/dev/ttyUSB0", "COM5", "COM7"} {
+		tickerFactory.Active[dev] = true
+	}
+	provider := connection.NewConnectionProvider(
+		ctx, tickerFactory,
 	)
 	factory := web.LogSockClientFactory{
 		Ctx: ctx, Provider: provider,

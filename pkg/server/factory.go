@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -31,6 +33,9 @@ func NewTickerFactory(ctx context.Context, period time.Duration) *TickerFactory 
 func (tf *TickerFactory) ListAccessible() []connection.ConnID {
 	tf.Lock.RLock()
 	defer tf.Lock.RUnlock()
+	if rand.Float64() > 0.5 {
+		return []connection.ConnID{}
+	}
 	accessible := make([]connection.ConnID, 0, len(tf.Active))
 	for conn := range tf.Active {
 		accessible = append(accessible, conn)
@@ -46,6 +51,10 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 		return connection.RawConnection{}, tf.Error
 	}
 	reader, writer := make(chan []byte), make(chan []byte)
+	// intermediate channel to communicate
+	// between reader and writer goroutines
+	// (essentially to redirect data from reader to writer)
+	pipe := make(chan []byte)
 	errChan := make(chan error)
 	connCtx, connCtxCancel := context.WithCancel(tf.Ctx)
 
@@ -57,6 +66,7 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 		// as this is the one sending to channel
 		ticker := time.NewTicker(tf.Period)
 		timer := time.NewTimer(tf.Period * 20)
+		ticks := 0
 		defer func() {
 			close(reader)
 			ticker.Stop()
@@ -71,12 +81,15 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 				log.Println(p.ID(), "producer context done")
 				return
 			case <-ticker.C:
+				ticks++
 				log.Println(p.ID(), "Ping")
-				reader <- []byte("Ping")
+				reader <- []byte(fmt.Sprint("Ping ", ticks))
 			case <-timer.C:
 				log.Println("emulates disconnect")
 				errChan <- io.EOF
 				continue
+			case chunk := <-pipe:
+				reader <- chunk
 			}
 		}
 	}()
@@ -85,6 +98,7 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 	// will consume incoming messages and
 	// print them out
 	go func() {
+		defer close(pipe)
 		for {
 			select {
 			case <-connCtx.Done():
@@ -92,6 +106,7 @@ func (tf *TickerFactory) NewWithProps(p connection.ConnectionProps) (connection.
 				return
 			case chunk := <-writer:
 				log.Println(p.ID(), "recieved data:", string(chunk))
+				pipe <- chunk
 			}
 		}
 	}()

@@ -17,6 +17,7 @@ const (
 	MethodRead     = "read"
 	MethodStop     = "stop"
 	MethodDiscover = "discover"
+	MethodSend     = "send"
 )
 
 var (
@@ -135,6 +136,8 @@ func (cl *LogSockClient) Handle(Ctx context.Context, r SerialRequest) {
 		cl.handleSerialDiscover()
 	case MethodStop:
 		cl.handleStop(r.Serial)
+	case MethodSend:
+		cl.handleSend(r)
 	default:
 		cl.WriterChan <- JsonifyError(ErrMethodInvaid, "")
 	}
@@ -158,6 +161,20 @@ func (cl *LogSockClient) handleStop(name string) {
 		log.Println("client asked to stop", name)
 		delete(cl.OpenConnections, name)
 		if err := conn.Close(); err != nil {
+			cl.WriterChan <- JsonifyError(err, name)
+		}
+		return
+	}
+	cl.WriterChan <- JsonifyError(ErrConnectionClosed, name)
+}
+
+func (cl *LogSockClient) handleSend(r SerialRequest) {
+	cl.Mu.Lock()
+	defer cl.Mu.Unlock()
+
+	name := r.Serial
+	if conn, exists := cl.OpenConnections[name]; exists {
+		if err := conn.Send([]byte(r.Message), time.Duration(r.Timeout)); err != nil {
 			cl.WriterChan <- JsonifyError(err, name)
 		}
 		return

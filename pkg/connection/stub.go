@@ -148,7 +148,7 @@ type ConnectionProvider struct {
 	connections map[ConnID]*connection
 }
 
-func NewConnctionProvider(ctx context.Context, factory ConnectionFactory) *ConnectionProvider {
+func NewConnectionProvider(ctx context.Context, factory ConnectionFactory) *ConnectionProvider {
 	return &ConnectionProvider{
 		connFactory: factory,
 		ctx:         ctx,

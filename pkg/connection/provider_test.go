@@ -150,7 +150,7 @@ func TestDummyFactory_SeveralClients(t *testing.T) {
 		Active:   []ConnID{"0"},
 		Err:      nil,
 	}
-	provider := NewConnctionProvider(ctx, &factory)
+	provider := NewConnectionProvider(ctx, &factory)
 	tt := &DummyProps{"42", 200}
 
 	proxyOne, err := provider.Open(tt)
@@ -227,7 +227,7 @@ func TestDummyFactory_NewWithProps(t *testing.T) {
 		Active:   []ConnID{"0", "4", "14"},
 		Err:      nil,
 	}
-	provider := NewConnctionProvider(ctx, &factory)
+	provider := NewConnectionProvider(ctx, &factory)
 	tt := &DummyProps{"77", 115200}
 
 	proxy, err := provider.Open(tt)
@@ -312,7 +312,7 @@ func TestDummyFactory_ClientWithTimeout(t *testing.T) {
 		Active:   []ConnID{"0"},
 		Err:      nil,
 	}
-	provider := NewConnctionProvider(ctx, &factory)
+	provider := NewConnectionProvider(ctx, &factory)
 	tt := &DummyProps{"0", 200}
 
 	proxy, err := provider.Open(tt)
@@ -381,7 +381,7 @@ func TestDummyFactory_ProducerConnectionLists(t *testing.T) {
 		Err:      nil,
 	}
 
-	provider := NewConnctionProvider(ctx, &factory)
+	provider := NewConnectionProvider(ctx, &factory)
 	// note that this proxy will be
 	proxy, err := provider.Open(&DummyProps{"5", 100})
 	if err != nil {

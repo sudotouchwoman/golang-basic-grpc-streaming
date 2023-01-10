@@ -28,7 +28,7 @@ func main() {
 	defer rootCtxCancel()
 
 	// create providers for log streaming
-	provider := connection.NewConnctionProvider(
+	provider := connection.NewConnectionProvider(
 		rootCtx, &serial.SerialConnectionFactory{
 			Mu:  &sync.RWMutex{},
 			Ctx: rootCtx,
