@@ -44,6 +44,11 @@ func main() {
 	router := mux.NewRouter()
 	router.Handle("/ws", wsHandler)
 	router.Use(PanicRecovery, LogRemoteAddr)
+	// serve static content (index and js bundle)
+	router.PathPrefix("/assets").Handler(http.FileServer(http.Dir("./dist/")))
+	router.Path("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "dist/index.html")
+	})
 
 	log.Println("starting ws server")
 	log.Fatal(http.ListenAndServe("localhost:8080", router))
